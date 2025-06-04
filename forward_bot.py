@@ -116,15 +116,15 @@ class MessageForwarder:
 
 def main():
     """主函数"""
-    try:
-        # 检查必要的环境变量
-        required_vars = ['API_ID', 'API_HASH', 'SOURCE_CHANNELS', 'TARGET_CHANNEL']
-        missing_vars = [var for var in required_vars if not os.getenv(var)]
-        
-        if missing_vars:
-            logger.error(f"缺少必要的环境变量: {', '.join(missing_vars)}")
-            sys.exit(1)
-            
+    # try:
+    #     # 检查必要的环境变量
+    #     required_vars = ['API_ID', 'API_HASH', 'SOURCE_CHANNELS', 'TARGET_CHANNEL']
+    #     missing_vars = [var for var in required_vars if not os.getenv(var)]
+    #
+    #     if missing_vars:
+    #         logger.error(f"缺少必要的环境变量: {', '.join(missing_vars)}")
+    #         sys.exit(1)
+    #
         # 设置 Windows 事件循环策略
         if sys.platform.startswith('win'):
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
