@@ -116,9 +116,9 @@ class MessageForwarder:
 
 def main():
     """主函数"""
-        # 创建并运行转发器
-        forwarder = MessageForwarder()
-        asyncio.run(forwarder.start())
+
+    forwarder = MessageForwarder()
+    asyncio.run(forwarder.start())
     # # try:
     # #     # 检查必要的环境变量
     # #     required_vars = ['API_ID', 'API_HASH', 'SOURCE_CHANNELS', 'TARGET_CHANNEL']
