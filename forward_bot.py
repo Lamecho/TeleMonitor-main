@@ -8,6 +8,13 @@ from telethon.tl.types import Message
 from loguru import logger
 from dotenv import load_dotenv
 
+API_ID=22533598
+API_HASH="f3f6997f26bb83ab2b1e04819c7af8ea"
+# 源频道（用逗号分隔多个频道）
+SOURCE_CHANNELS = "@hahaha54354"
+# 目标频道
+TARGET_CHANNEL = "@lucifer6969aaa"
+
 # 加载环境变量
 load_dotenv()
 
@@ -27,12 +34,12 @@ logger.add(
 
 class MessageForwarder:
     def __init__(self):
-        self.api_id = os.getenv('API_ID')
-        self.api_hash = os.getenv('API_HASH')
-        self.source_channels = os.getenv('SOURCE_CHANNELS', '').split(',')
-        self.target_channel = os.getenv('TARGET_CHANNEL')
+        self.api_id = API_ID
+        self.api_hash = API_HASH
+        self.source_channels = SOURCE_CHANNELS.split(',')
+        self.target_channel = TARGET_CHANNEL
         self.client = None
-        self._setup_client()
+
 
     def _setup_client(self):
         """设置 Telegram 客户端"""
