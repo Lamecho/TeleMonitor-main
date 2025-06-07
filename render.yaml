@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: telemonitor-app
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: python forward_bot.py
+    autoDeploy: true
+    runtime: python
