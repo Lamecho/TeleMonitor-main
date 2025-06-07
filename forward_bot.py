@@ -420,12 +420,32 @@ class MessageForwarder:
             if not user_session:
                 raise ValueError("需要在环境变量中设置 USER_SESSION_STRING")
 
+            # 验证会话字符串格式
+            try:
+                # 确保字符串长度是4的倍数
+                padding_needed = len(user_session) % 4
+                if padding_needed:
+                    user_session += '=' * (4 - padding_needed)
+
+                # 尝试解码会话字符串
+                StringSession(user_session)
+            except Exception as e:
+                logger.error(f"会话字符串格式无效: {str(e)}")
+                raise ValueError("会话字符串格式无效，请确保复制了完整的字符串，包括所有等号")
+
+            logger.info("会话字符串验证成功")
+
             # 用户账号客户端，使用字符串会话
             self.user_client = TelegramClient(
                 StringSession(user_session),
                 self.api_id,
                 self.api_hash,
-                loop=self.loop
+                loop=self.loop,
+                device_model="Windows 10",
+                system_version="Windows 10",
+                app_version="1.0",
+                lang_code="zh-CN",
+                system_lang_code="zh-CN"
             )
 
             # Bot客户端，使用bot_token直接登录
