@@ -19,7 +19,7 @@ import threading
 beijing_tz = pytz.timezone("Asia/Shanghai")
 
 # 源频道和目标频道配置
-SOURCE_CHANNELS = ['@CHATROOMA777',
+SOURCE_CHANNELS = ['@CHATROOMA777','@bqs666',
     "@yuanchengbangong", "@YCSL588", "@HHJason123", "@shuangxiugognzuo",
     "@haiwaiIt", "@huhulc500", "@utgroupjob", "@ferm_yiyi", "@warming111",
     "@keepondoing33", "@sus_hhll", "@PAZP7", "@Winnieachr", "@HR_PURR",
@@ -31,7 +31,7 @@ SOURCE_CHANNELS = ['@CHATROOMA777',
 TARGET_CHANNEL = ["@CHATROOMA999"]
 KEYWORDS_CHANNEL_1 = ["@miaowu333"]
 KEYWORDS_CHANNEL_2 = ["@yuancheng5551"]
-LOGS_CHANNEL = ["@logsme333"]  
+LOGS_CHANNEL = ["@logsme333"]
 
 # 加载环境变量
 load_dotenv()
@@ -101,8 +101,8 @@ class TelegramLogHandler:
         self.channel = channel
         self.log_queue = queue.Queue()
         self.is_running = False
-        self.batch_size = 10  # 每次发送的最大日志条数
-        self.batch_timeout = 5  # 批量发送超时时间（秒）
+        self.batch_size = 5  # 每次发送的最大日志条数
+        self.batch_timeout = 3  # 批量发送超时时间（秒）
         self.last_send_time = time.time()
         self.cleaner_thread = None
         self.last_cleanup_time = time.time()
@@ -160,41 +160,49 @@ class TelegramLogHandler:
 
     async def _send_logs(self):
         """发送日志消息到Telegram频道"""
+        logger.debug("日志发送任务已启动")
         batch_logs = []
         while self.is_running:
             try:
-                # 收集日志消息
+                # 尝试从队列获取消息
                 try:
-                    while len(batch_logs) < self.batch_size:
-                        log_message = self.log_queue.get_nowait()
-                        batch_logs.append(log_message)
+                    # 立即获取所有可用的消息
+                    while True:
+                        message = self.log_queue.get_nowait()
+                        batch_logs.append(message)
+                        logger.debug(f"从队列获取到消息，当前批次大小: {len(batch_logs)}")
                 except queue.Empty:
+                    # 队列为空时继续处理
+                    if batch_logs:
+                        logger.debug(f"队列为空，当前批次中有 {len(batch_logs)} 条消息待发送")
                     pass
 
                 current_time = time.time()
                 # 如果有日志且(达到批次大小或超过超时时间)，则发送
-                if batch_logs and (len(batch_logs) >= self.batch_size or 
+                if batch_logs and (len(batch_logs) >= self.batch_size or
                                  current_time - self.last_send_time > self.batch_timeout):
                     try:
+                        logger.debug(f"准备发送 {len(batch_logs)} 条日志消息")
                         # 组合日志消息
                         combined_message = "📋 **系统日志**\n```\n"
-                        combined_message += "\n".join(batch_logs[-20:])  # 最多显示20条
+                        combined_message += "\n".join(batch_logs)
                         combined_message += "\n```"
 
                         if self.client and self.client.is_connected():
                             await self.client.send_message(self.channel, combined_message)
+                            logger.debug(f"成功发送了 {len(batch_logs)} 条日志消息")
                             self.last_send_time = current_time
-                            batch_logs.clear()
-                            await asyncio.sleep(1)  # 发送间隔
+                            batch_logs = []
                     except Exception as e:
                         logger.error(f"发送日志到Telegram失败: {e}")
-                        await asyncio.sleep(5)  # 发送失败后等待更长时间
+                        await asyncio.sleep(2)
 
-                await asyncio.sleep(0.1)  # 避免CPU占用过高
+                # 短暂等待后继续检查
+                await asyncio.sleep(0.5)
 
             except Exception as e:
                 logger.error(f"日志处理器出错: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(2)
 
     def send_log(self, message):
         """添加日志消息到队列"""
@@ -202,15 +210,41 @@ class TelegramLogHandler:
             # 格式化日志消息
             formatted_message = message.rstrip('\n')
             self.log_queue.put_nowait(formatted_message)
+            logger.debug(f"日志已加入队列，当前队列大小: {self.log_queue.qsize()}")
         except queue.Full:
-            # 队列满时，直接丢弃消息
-            pass
+            logger.error("日志队列已满，消息丢失")
 
     def stop(self):
         """停止日志发送器"""
         self.is_running = False
         if self.cleaner_thread and self.cleaner_thread.is_alive():
             self.cleaner_thread.join(timeout=1)
+
+        # 发送剩余的日志
+        if hasattr(self, 'client') and self.client and self.client.is_connected():
+            remaining_logs = []
+            while not self.log_queue.empty():
+                try:
+                    remaining_logs.append(self.log_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            if remaining_logs:
+                combined_message = "📋 **系统日志（最终批次）**\n```\n"
+                combined_message += "\n".join(remaining_logs)
+                combined_message += "\n```"
+
+                async def send_final_logs():
+                    try:
+                        await self.client.send_message(self.channel, combined_message)
+                    except Exception as e:
+                        logger.error(f"发送最终日志批次失败: {e}")
+
+                # 创建新的事件循环来发送最后的日志
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(send_final_logs())
+                loop.close()
 
 class MessageForwarder:
     def __init__(self):
@@ -547,14 +581,14 @@ class MessageForwarder:
             # logger.info("1. 启动用户客户端...")
             await self.user_client.start()
             user_me = await self.user_client.get_me()
-            logger.info(f"✓ 用户HASH已连接: {user_me.first_name} (@{user_me.username})")
+            logger.info(f"用户HASH已连接: {user_me.first_name} (@{user_me.username})")
             logger.debug(f"✓ 连接状态: {self.user_client.is_connected()}")
 
             # 启动Bot客户端（用于转发）
             # logger.info("2. 启动Bot客户端...")
             await self.bot_client.start(bot_token=self.bot_token)
             bot_me = await self.bot_client.get_me()
-            logger.info(f"✓ 用户Bot已连接: {bot_me.first_name} (@{bot_me.username})")
+            logger.info(f"用户Bot已连接: {bot_me.first_name} (@{bot_me.username})")
             logger.debug(f"✓ 连接状态: {self.bot_client.is_connected()}")
 
             # 初始化并启动Telegram日志处理器
@@ -566,7 +600,7 @@ class MessageForwarder:
 
             # 添加Telegram日志输出
             logger.add(telegram_log_sink, level="INFO")
-            logger.info("✓ Telegram日志处理器已启动")
+            logger.info("Tg日志处理器已启动")
 
             # 检查事件处理器
             # logger.info("4. 检查事件处理器...")

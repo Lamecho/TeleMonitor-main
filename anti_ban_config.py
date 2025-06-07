@@ -107,7 +107,7 @@ class AntiBanStrategies:
         self.last_message_time = time.time()
 
         if config.ADAPTIVE_DELAY:
-            self.current_delay_multiplier = max(0.5, 
+            self.current_delay_multiplier = max(0.5,
                 self.current_delay_multiplier * config.SUCCESS_REDUCE_FACTOR)
 
     def record_error(self, error_msg=""):
