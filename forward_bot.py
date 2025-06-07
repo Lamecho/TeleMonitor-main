@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 import sys
+import signal
 from datetime import datetime, timedelta
 import time
 import pytz
@@ -310,6 +311,8 @@ class MessageForwarder:
         self.start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
         self.last_message_received = None
         self.total_messages_processed = 0
+        self.running = True
+        self.tasks = []
 
         # User-Agent池
         self.user_agents = [
@@ -817,9 +820,39 @@ class MessageForwarder:
             # 等待4分钟
             await asyncio.sleep(240)
 
+    async def cleanup(self):
+        """清理资源"""
+        logger.info("开始清理资源...")
+        self.running = False
+
+        # 停止所有任务
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+
+        # 等待任务完成
+        if self.tasks:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+
+        # 关闭客户端连接
+        if self.user_client:
+            await self.user_client.disconnect()
+        if self.bot_client:
+            await self.bot_client.disconnect()
+
+        # 停止日志处理器
+        if self.telegram_log_handler:
+            self.telegram_log_handler.stop()
+
+        logger.info("资源清理完成")
+
     async def start(self):
         """启动转发器"""
         try:
+            # 设置信号处理
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                self.loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.handle_signal(s)))
+
             logger.debug(f"API ID: {self.api_id}")
 
             # 启动用户客户端（用于监听）
@@ -852,18 +885,28 @@ class MessageForwarder:
             logger.info("等待新消息中...")
 
             # 启动状态监控任务
-            self.loop.create_task(self._monitor_status())
-            self.loop.create_task(self._periodic_status_check())
-            self.loop.create_task(self.check_status())  # 添加新的状态检查任务
+            self.tasks.extend([
+                self.loop.create_task(self._monitor_status()),
+                self.loop.create_task(self._periodic_status_check()),
+                self.loop.create_task(self.check_status())
+            ])
 
-            # 运行直到断开连接
-            await self.user_client.run_until_disconnected()
+            # 运行直到收到停止信号
+            while self.running:
+                await asyncio.sleep(1)
 
         except Exception as e:
             logger.error(f"启动时出错: {str(e)}")
             import traceback
             logger.error(f"完整错误信息:\n{traceback.format_exc()}")
             raise
+        finally:
+            await self.cleanup()
+
+    async def handle_signal(self, sig):
+        """处理系统信号"""
+        logger.info(f"收到信号 {sig.name}，准备关闭...")
+        self.running = False
 
     async def _monitor_status(self):
         """监控状态，定期检查是否需要恢复监听"""
@@ -941,16 +984,20 @@ def main():
             forwarder.loop.run_until_complete(forwarder.start())
         else:
             logger.error("事件循环未初始化或已关闭")
+    except KeyboardInterrupt:
+        logger.info("收到键盘中断信号")
     except Exception as e:
         logger.error(f"主函数运行出错: {str(e)}")
         import traceback
         logger.error(f"完整错误信息:\n{traceback.format_exc()}")
     finally:
+        # 确保资源被正确清理
         if forwarder and forwarder.loop and not forwarder.loop.is_closed():
             try:
+                forwarder.loop.run_until_complete(forwarder.cleanup())
                 forwarder.loop.close()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"清理资源时出错: {str(e)}")
 
 
 if __name__ == "__main__":
