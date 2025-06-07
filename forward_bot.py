@@ -14,32 +14,72 @@ from telethon.errors import FloodWaitError, PeerFloodError
 from anti_ban_config import AntiBanConfig, AntiBanStrategies
 import queue
 import threading
+from flask import Flask, jsonify
+import nest_asyncio
+from waitress import serve
+import aiohttp
+import random
+import json
+from urllib.parse import urlparse
+
+# 启用嵌套事件循环
+nest_asyncio.apply()
+
+# 加载环境变量
+load_dotenv()
 
 # 设置时区
 beijing_tz = pytz.timezone("Asia/Shanghai")
 
 # 源频道和目标频道配置
-SOURCE_CHANNELS = ['@CHATROOMA777','@bqs666',
-    "@yuanchengbangong", "@YCSL588", "@HHJason123", "@shuangxiugognzuo",
-    "@haiwaiIt", "@huhulc500", "@utgroupjob", "@ferm_yiyi", "@warming111",
-    "@keepondoing33", "@sus_hhll", "@PAZP7", "@Winnieachr", "@HR_PURR",
-    "@zhaopin_jishu", "@PMGAME9OFF6OBGAME", "@makatizhipinz", "@yuancheng_job",
-    "@remote_cn", "@yuanchenggongzuoOB", "@taiwanjobstreet", "@MLXYZP"
-]
+SOURCE_CHANNELS = ['@CHATROOMA777', '@bqs666',
+                   "@yuanchengbangong", "@YCSL588", "@HHJason123", "@shuangxiugognzuo",
+                   "@haiwaiIt", "@huhulc500", "@utgroupjob", "@ferm_yiyi", "@warming111",
+                   "@keepondoing33", "@sus_hhll", "@PAZP7", "@Winnieachr", "@HR_PURR",
+                   "@zhaopin_jishu", "@PMGAME9OFF6OBGAME", "@makatizhipinz", "@yuancheng_job",
+                   "@remote_cn", "@yuanchenggongzuoOB", "@taiwanjobstreet", "@MLXYZP"
+                   ]
 
-# print(str(len(SOURCE_CHANNELS))+"个源频道")
 TARGET_CHANNEL = ["@CHATROOMA999"]
 KEYWORDS_CHANNEL_1 = ["@miaowu333"]
 KEYWORDS_CHANNEL_2 = ["@yuancheng5551"]
 LOGS_CHANNEL = ["@logsme333"]
 
-# 加载环境变量
-load_dotenv()
+# Flask 应用
+app = Flask(__name__)
+app.config.update(
+    ENV='production',
+    DEBUG=False,
+    TESTING=False,
+    SECRET_KEY=os.urandom(24)
+)
+
+
+@app.route('/')
+def home():
+    from flask import jsonify
+    return jsonify({
+        'status': 'success',
+        'message': 'Telegram Bot is running!',
+        'timestamp': datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
+    }), 200
+
+
+def run_flask():
+    """运行生产级别的 Flask 服务器"""
+    try:
+        serve(app, host='0.0.0.0', port=8080, threads=2)
+    except Exception as e:
+        logger.error(f"Flask 服务器启动失败: {e}")
+        # 如果 waitress 失败，回退到开发服务器
+        app.run(host='0.0.0.0', port=8080)
+
 
 def patcher(record):
     beijing_now = datetime.now(
         pytz.timezone("Asia/Shanghai")).strftime("%m-%d %H:%M:%S")
     record["extra"]["beijing_time"] = beijing_now
+
 
 # 清除默认 logger
 logger.remove()
@@ -52,10 +92,10 @@ try:
     logger.add(
         sys.stderr,
         format="<green>{extra[beijing_time]}</green> | <level>{level:<8}</level> | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         level="INFO",
         enqueue=True,
-        catch=True,  # 捕获异常
+        catch=True,
         diagnose=True
     )
 
@@ -64,7 +104,7 @@ try:
     beijing_now_str = datetime.now(
         pytz.timezone("Asia/Shanghai")).strftime("%m-%d//%H:%M")
 
-    # 文件日志输出 - 使用北京时间
+    # 文件日志输出
     logger.add(
         f"logs/hrbot_{beijing_now_str}.log",
         rotation="300 MB",
@@ -72,18 +112,18 @@ try:
         level="DEBUG",
         encoding="utf-8",
         enqueue=True,
-        catch=True,  # 捕获异常
+        catch=True,
         diagnose=True,
         format="<green>{extra[beijing_time]}</green> | <level>{level:<8}</level> | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
 except Exception as e:
     print(f"日志配置出错: {e}")
-    # 确保至少有一个基本的日志处理器
     logger.add(sys.stderr, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 # 全局日志处理器实例
 telegram_log_handler = None
+
 
 def telegram_log_sink(message):
     """自定义日志输出到Telegram"""
@@ -180,7 +220,7 @@ class TelegramLogHandler:
                 current_time = time.time()
                 # 如果有日志且(达到批次大小或超过超时时间)，则发送
                 if batch_logs and (len(batch_logs) >= self.batch_size or
-                                 current_time - self.last_send_time > self.batch_timeout):
+                                   current_time - self.last_send_time > self.batch_timeout):
                     try:
                         logger.debug(f"准备发送 {len(batch_logs)} 条日志消息")
                         # 组合日志消息
@@ -246,6 +286,7 @@ class TelegramLogHandler:
                 loop.run_until_complete(send_final_logs())
                 loop.close()
 
+
 class MessageForwarder:
     def __init__(self):
         self.api_id = int(os.getenv("API_ID"))
@@ -255,29 +296,126 @@ class MessageForwarder:
         self.anti_ban_strategies = AntiBanStrategies()
         self.source_channels = SOURCE_CHANNELS
         self.target_channel = TARGET_CHANNEL
-        self.user_client = None  # 用户账号客户端，用于监听
-        self.bot_client = None   # Bot客户端，用于转发
+        self.user_client = None
+        self.bot_client = None
         self.message_delays = defaultdict(float)
         self.is_listening = True
         self.pause_until = None
-        self.processed_messages = set()  # 用于存储已处理的消息ID
-        self.message_lock = asyncio.Lock()  # 用于确保消息处理的原子性
+        self.processed_messages = set()
+        self.message_lock = asyncio.Lock()
+        self.telegram_log_handler = None
+        self.start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
+        self.last_message_received = None
+        self.total_messages_processed = 0
+
+        # User-Agent池
+        self.user_agents = [
+            # Chrome
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            # Firefox
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:123.0) Gecko/20100101 Firefox/123.0',
+            # Safari
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15',
+            # Edge
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+        ]
+
+        # 更新为实际浏览器的请求头配置
+        self.browser_profile = {
+            ':authority': 'amazing-vast-pirate.glitch.me',
+            ':method': 'GET',
+            ':scheme': 'https',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-encoding': 'gzip, deflate, br, zstd',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'cache-control': 'max-age=0',
+            'priority': 'u=0, i',
+            'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'document',
+            'sec-fetch-mode': 'navigate',
+            'sec-fetch-site': 'none',
+            'sec-fetch-user': '?1',
+            'upgrade-insecure-requests': '1',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
+        }
+
+        # 初始化基础请求头
+        self.base_headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5,zh-CN;q=0.3',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'DNT': '1',
+        }
+
+        # 初始化事件循环
+        try:
+            self.loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+
         self._setup_clients()
-        self.telegram_log_handler = None  # 初始化日志处理器
+
+    def _get_random_headers(self):
+        """获取随机的请求头"""
+        headers = self.base_headers.copy()
+        headers['User-Agent'] = random.choice(self.user_agents)
+
+        # 随机添加一些额外的请求头
+        if random.random() > 0.5:
+            headers['Sec-CH-UA'] = '"Chromium";v="120", "Google Chrome";v="120", "Not=A?Brand";v="99"'
+            headers['Sec-CH-UA-Mobile'] = '?0'
+            headers['Sec-CH-UA-Platform'] = '"Windows"'
+
+        return headers
+
+    def _get_browser_profile(self):
+        """获取完整的浏览器配置"""
+        profile = self.browser_profile.copy()
+
+        # 添加通用头部
+        profile.update({
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-User': '?1',
+            'Sec-Fetch-Dest': 'document',
+            'Cache-Control': 'max-age=0',
+        })
+
+        # 随机添加一些额外头部
+        if random.random() > 0.5:
+            profile.update({
+                'DNT': '1',
+                'Pragma': 'no-cache'
+            })
+
+        return profile
 
     def _setup_clients(self):
         """设置 Telegram 客户端"""
         try:
             # 用户账号客户端，用于监听消息
-            self.user_client = TelegramClient('user_session', self.api_id, self.api_hash)
-            # logger.info("正在设置用户客户端...")
+            self.user_client = TelegramClient('user_session', self.api_id, self.api_hash, loop=self.loop)
 
             # Bot客户端，用于转发消息
-            self.bot_client = TelegramClient('bot_session', self.api_id, self.api_hash)
-            # logger.info("正在设置Bot客户端...")
+            self.bot_client = TelegramClient('bot_session', self.api_id, self.api_hash, loop=self.loop)
 
-            # 主要监听器：监听指定频道的消息
-            @self.user_client.on(events.NewMessage())  # 先监听所有消息，方便调试
+            # 设置消息处理器
+            @self.user_client.on(events.NewMessage())
             async def debug_message_handler(event: events.NewMessage.Event):
                 try:
                     message = event.message
@@ -287,18 +425,14 @@ class MessageForwarder:
                     logger.debug(f"收到新消息，来自: {channel_name}")
                     logger.debug(f"消息内容: {message.text[:100] if message.text else '无文本'}")
 
-                    # 检查是否是我们要监听的频道
                     if channel_name in self.source_channels:
-                        # 检查消息是否已经处理过
                         message_id = f"{channel_name}:{message.id}"
                         async with self.message_lock:
                             if message_id in self.processed_messages:
                                 logger.info(f"跳过重复消息: {message_id}")
                                 return
 
-                            # 添加到已处理集合
                             self.processed_messages.add(message_id)
-                            # 保持集合大小在合理范围内
                             if len(self.processed_messages) > 1000:
                                 self.processed_messages = set(list(self.processed_messages)[-1000:])
 
@@ -312,16 +446,71 @@ class MessageForwarder:
                     import traceback
                     logger.error(f"错误堆栈: {traceback.format_exc()}")
 
-            # logger.info(f"已设置消息监听器，目标频道: {', '.join(self.source_channels)}")
-
         except Exception as e:
             logger.error(f"设置客户端时出错: {str(e)}")
             raise
+
+    async def check_url_access(self, url):
+        """检查URL是否可访问"""
+        try:
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc
+
+            # 获取基础请求头配置
+            headers = self.browser_profile.copy()
+
+            # 更新domain相关的头部
+            headers[':authority'] = domain
+            headers[':path'] = parsed_url.path or '/'
+
+            # 移除pseudo headers，因为aiohttp会自动处理这些
+            pseudo_headers = [':authority', ':method', ':path', ':scheme']
+            headers = {k: v for k, v in headers.items() if k not in pseudo_headers}
+
+            logger.debug(f"尝试访问URL: {url}")
+            logger.debug(f"使用请求头: {json.dumps(headers, indent=2)}")
+
+            # 配置 aiohttp 客户端选项
+            conn = aiohttp.TCPConnector(ssl=False)  # 禁用SSL验证
+            timeout = aiohttp.ClientTimeout(total=30)
+
+            async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
+                try:
+                    async with session.get(url, headers=headers, allow_redirects=True) as response:
+                        logger.debug(f"响应状态码: {response.status}")
+                        logger.debug(f"响应头: {json.dumps(dict(response.headers), indent=2)}")
+
+                        if response.status == 403:
+                            logger.error(f"访问被拒绝(403 Forbidden): {url}")
+                            return False
+                        elif response.status == 200:
+                            logger.info(f"成功访问URL: {url}")
+                            return True
+                        else:
+                            logger.warning(f"收到非预期状态码: {response.status}")
+                            return False
+
+                except aiohttp.ClientError as e:
+                    logger.error(f"请求出错: {str(e)}")
+                    return False
+
+        except Exception as e:
+            logger.error(f"URL访问检查过程中发生未知错误: {str(e)}")
+            return False
 
     async def _process_message(self, message, channel_name):
         """处理消息的统一方法"""
         message_id = f"{channel_name}:{message.id}"
         try:
+            # 如果消息中包含URL，先检查可访问性
+            if message.text:
+                urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+                                  message.text)
+                for url in urls:
+                    if not await self.check_url_access(url):
+                        logger.warning(f"URL {url} 不可访问，将在消息中标注")
+                        message.text = message.text.replace(url, f"{url} [⚠️访问受限]")
+
             # 添加工作时间和安全时间检查的详细日志
             is_work_time = self.anti_ban_strategies.is_work_time()
             is_safe_time = self.anti_ban_strategies.is_safe_time()
@@ -337,7 +526,8 @@ class MessageForwarder:
             logger.info("🕒 消息处理状态检查:")
             if in_work_hours:
                 if is_weekend:
-                    logger.info("  • 当前是周末工作时间(9:00-18:00): " + ("✅ 随机通过" if is_work_time else "❌ 随机跳过(50%概率)"))
+                    logger.info("  • 当前是周末工作时间(9:00-18:00): " + (
+                        "✅ 随机通过" if is_work_time else "❌ 随机跳过(50%概率)"))
                 else:
                     logger.info("  • 当前是工作日工作时间(9:00-18:00): ✅ 正常处理")
             else:
@@ -353,13 +543,13 @@ class MessageForwarder:
             # 检查是否应该处理这条消息
             if not is_work_time:
                 if in_work_hours and is_weekend:
-                    logger.info(f"⏸️ 周末工作时间消息随机跳过，当前时间: {current_time.strftime('%H:%M')}")
+                    logger.info(f"❌ 周末工作时间消息随机跳过，当前时间: {current_time.strftime('%H:%M')}")
                 else:
-                    logger.info(f"⏸️ 非工作时间消息随机跳过，当前时间: {current_time.strftime('%H:%M')}")
+                    logger.info(f"❌ 非工作时间消息随机跳过，当前时间: {current_time.strftime('%H:%M')}")
                 return
 
             if not is_safe_time:
-                logger.warning(f"⏸️ 不在安全时间范围内(7:00-23:00)，当前时间: {current_time.strftime('%H:%M')}")
+                logger.warning(f"❌ 不在安全时间范围内(7:00-23:00)，当前时间: {current_time.strftime('%H:%M')}")
                 return
 
             # 如果所有检查都通过，继续处理消息
@@ -385,7 +575,8 @@ class MessageForwarder:
                 # 清理多余的空白字符
                 text = re.sub(r'\s+', ' ', text).strip()
                 # 清理URL但保留显示文本
-                text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+                text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '',
+                              text)
                 return text
 
             cleaned_text = clean_text(message.text or '')
@@ -394,7 +585,7 @@ class MessageForwarder:
             header = (
                 f"🔄 转发自: {source_channel}\n"
                 f"⏰ 时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"{'='*30}"
+                f"{'=' * 30}"
             )
 
             body = cleaned_text if cleaned_text else "（无文本内容）"
@@ -511,7 +702,8 @@ class MessageForwarder:
             # 记录成功发送
             self.anti_ban_strategies.record_success()
 
-            logger.info(f"📈 转发统计 分钟内: {self.anti_ban_strategies.message_count['minute']}, 小时内: {self.anti_ban_strategies.message_count['hour']}")
+            logger.info(
+                f"📈 转发统计 分钟内: {self.anti_ban_strategies.message_count['minute']}, 小时内: {self.anti_ban_strategies.message_count['hour']}")
             logger.success("🎉 消息转发流程完全完成")
 
         except Exception as e:
@@ -568,31 +760,78 @@ class MessageForwarder:
         self.pause_until = None
         logger.info("已恢复消息监听")
 
+    async def check_status(self):
+        """每4分钟检查一次运行状态"""
+        while True:
+            try:
+                current_time = datetime.now(pytz.timezone("Asia/Shanghai"))
+                uptime = current_time - self.start_time
+
+                status_report = [
+                    "🤖 机器人运行状态报告",
+                    f"⏰ 当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"⌛ 已运行时间: {str(uptime).split('.')[0]}",
+                    f"📊 处理消息统计:",
+                    f"  • 总处理消息: {self.total_messages_processed}",
+                    f"  • 最后消息时间: {self.last_message_received.strftime('%Y-%m-%d %H:%M:%S') if self.last_message_received else '无'}",
+                    f"  • 缓存消息数量: {len(self.processed_messages)}",
+                    f"💡 系统状态:",
+                    f"  • 监听状态: {'✅ 正常' if self.is_listening else '⛔ 已暂停'}",
+                    f"  • 暂停时间: {self.pause_until.strftime('%Y-%m-%d %H:%M:%S') if self.pause_until else '无'}",
+                    f"  • 用户客户端: {'✅ 已连接' if self.user_client.is_connected() else '❌ 未连接'}",
+                    f"  • Bot客户端: {'✅ 已连接' if self.bot_client.is_connected() else '❌ 未连接'}",
+                    f"📈 消息限制:",
+                    f"  • 分钟内: {self.anti_ban_strategies.message_count['minute']}/{self.anti_ban_config.MAX_MESSAGES_PER_MINUTE}",
+                    f"  • 小时内: {self.anti_ban_strategies.message_count['hour']}/{self.anti_ban_config.MAX_MESSAGES_PER_HOUR}",
+                    f"  • 今日内: {self.anti_ban_strategies.message_count['day']}/{self.anti_ban_config.MAX_MESSAGES_PER_DAY}",
+                    f"⚙️ 运行参数:",
+                    f"  • 延迟倍数: {self.anti_ban_strategies.current_delay_multiplier:.2f}",
+                    f"  • 连续错误: {self.anti_ban_strategies.consecutive_errors}",
+                    f"  • 工作时间: {'✅' if self.anti_ban_strategies.is_work_time() else '❌'}",
+                    f"  • 安全时间: {'✅' if self.anti_ban_strategies.is_safe_time() else '❌'}"
+                ]
+
+                status_message = "\n".join(status_report)
+                logger.info(status_message)
+
+                # 如果有任何异常状态，添加警告
+                warnings = []
+                if not self.is_listening:
+                    warnings.append("⚠️ 机器人当前不在监听状态")
+                if not self.user_client.is_connected():
+                    warnings.append("⚠️ 用户客户端未连接")
+                if not self.bot_client.is_connected():
+                    warnings.append("⚠️ Bot客户端未连接")
+                if self.anti_ban_strategies.consecutive_errors > 0:
+                    warnings.append(f"⚠️ 存在 {self.anti_ban_strategies.consecutive_errors} 个连续错误")
+
+                if warnings:
+                    logger.warning("\n".join(warnings))
+
+            except Exception as e:
+                logger.error(f"状态检查出错: {e}")
+
+            # 等待4分钟
+            await asyncio.sleep(240)
 
     async def start(self):
         """启动转发器"""
         try:
-            # logger.info("=== 启动消息转发器 ===")
             logger.debug(f"API ID: {self.api_id}")
-           # logger.info(f"目标频道: {', '.join(self.target_channel)}")
-           # logger.info(f"日志频道: {', '.join(LOGS_CHANNEL)}")
 
             # 启动用户客户端（用于监听）
-            # logger.info("1. 启动用户客户端...")
             await self.user_client.start()
             user_me = await self.user_client.get_me()
             logger.info(f"用户HASH已连接: {user_me.first_name} (@{user_me.username})")
             logger.debug(f"✓ 连接状态: {self.user_client.is_connected()}")
 
             # 启动Bot客户端（用于转发）
-            # logger.info("2. 启动Bot客户端...")
             await self.bot_client.start(bot_token=self.bot_token)
             bot_me = await self.bot_client.get_me()
             logger.info(f"用户Bot已连接: {bot_me.first_name} (@{bot_me.username})")
             logger.debug(f"✓ 连接状态: {self.bot_client.is_connected()}")
 
             # 初始化并启动Telegram日志处理器
-            # logger.info("3. 启动Telegram日志处理器...")
             global telegram_log_handler
             self.telegram_log_handler = TelegramLogHandler(self.bot_client, LOGS_CHANNEL[0])
             telegram_log_handler = self.telegram_log_handler
@@ -603,19 +842,18 @@ class MessageForwarder:
             logger.info("Tg日志处理器已启动")
 
             # 检查事件处理器
-            # logger.info("4. 检查事件处理器...")
             event_handlers = self.user_client.list_event_handlers()
-            # logger.info(f"✓ 已注册的事件处理器数量: {len(event_handlers)}")
             for i, handler in enumerate(event_handlers):
-                logger.debug(f"  处理器{i+1}: {handler}")
+                logger.debug(f"  处理器{i + 1}: {handler}")
 
-            # logger.info("5. 开始监听消息...")
             logger.info("等待新消息中...")
 
             # 启动状态监控任务
-            asyncio.create_task(self._monitor_status())
-            asyncio.create_task(self._periodic_status_check())
+            self.loop.create_task(self._monitor_status())
+            self.loop.create_task(self._periodic_status_check())
+            self.loop.create_task(self.check_status())  # 添加新的状态检查任务
 
+            # 运行直到断开连接
             await self.user_client.run_until_disconnected()
 
         except Exception as e:
@@ -682,10 +920,35 @@ class MessageForwarder:
                 logger.error(f"状态检查出错: {e}")
                 await asyncio.sleep(300)  # 出错后等待5分钟再试
 
+
 def main():
     """主函数"""
-    forwarder = MessageForwarder()
-    asyncio.run(forwarder.start())
+    forwarder = None
+    try:
+        # 启动 Flask 在新线程
+        flask_thread = threading.Thread(target=run_flask)
+        flask_thread.daemon = True
+        flask_thread.start()
+
+        # 创建转发器实例
+        forwarder = MessageForwarder()
+
+        # 运行转发器
+        if forwarder.loop and not forwarder.loop.is_closed():
+            forwarder.loop.run_until_complete(forwarder.start())
+        else:
+            logger.error("事件循环未初始化或已关闭")
+    except Exception as e:
+        logger.error(f"主函数运行出错: {str(e)}")
+        import traceback
+        logger.error(f"完整错误信息:\n{traceback.format_exc()}")
+    finally:
+        if forwarder and forwarder.loop and not forwarder.loop.is_closed():
+            try:
+                forwarder.loop.close()
+            except:
+                pass
+
 
 if __name__ == "__main__":
     main()
