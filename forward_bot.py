@@ -68,11 +68,14 @@ def home():
 def run_flask():
     """运行生产级别的 Flask 服务器"""
     try:
-        serve(app, host='0.0.0.0', port=8080, threads=2)
+        # 使用环境变量中的端口，如果没有则默认使用3000
+        port = int(os.getenv('PORT', 3000))
+        serve(app, host='0.0.0.0', port=port, threads=2)
     except Exception as e:
         logger.error(f"Flask 服务器启动失败: {e}")
         # 如果 waitress 失败，回退到开发服务器
-        app.run(host='0.0.0.0', port=8080)
+        port = int(os.getenv('PORT', 3000))
+        app.run(host='0.0.0.0', port=port)
 
 
 def patcher(record):
