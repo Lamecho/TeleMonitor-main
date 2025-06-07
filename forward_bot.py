@@ -22,6 +22,7 @@ import aiohttp
 import random
 import json
 from urllib.parse import urlparse
+from telethon.sessions import StringSession
 
 # 启用嵌套事件循环
 nest_asyncio.apply()
@@ -414,11 +415,26 @@ class MessageForwarder:
     def _setup_clients(self):
         """设置 Telegram 客户端"""
         try:
-            # 用户账号客户端，用于监听消息
-            self.user_client = TelegramClient('user_session', self.api_id, self.api_hash, loop=self.loop)
+            # 从环境变量获取会话字符串
+            user_session = os.getenv('USER_SESSION_STRING')
+            if not user_session:
+                raise ValueError("需要在环境变量中设置 USER_SESSION_STRING")
 
-            # Bot客户端，用于转发消息
-            self.bot_client = TelegramClient('bot_session', self.api_id, self.api_hash, loop=self.loop)
+            # 用户账号客户端，使用字符串会话
+            self.user_client = TelegramClient(
+                StringSession(user_session),
+                self.api_id,
+                self.api_hash,
+                loop=self.loop
+            )
+
+            # Bot客户端，使用bot_token直接登录
+            self.bot_client = TelegramClient(
+                None,  # 不需要会话文件
+                self.api_id,
+                self.api_hash,
+                loop=self.loop
+            )
 
             # 设置消息处理器
             @self.user_client.on(events.NewMessage())
